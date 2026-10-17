@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <iomanip>
 #include <iostream>
+#include <limits>
 #include <random>
 #include <string>
 #include <vector>
@@ -101,11 +102,17 @@ int main(int argc, char** argv) {
     double serial_total = 0.0;
     double batch_total = 0.0;
     std::size_t checked = 0;
+    std::size_t minimum_initial_edges = std::numeric_limits<std::size_t>::max();
+    std::size_t maximum_initial_edges = 0;
+    std::size_t total_initial_edges = 0;
 
     for (std::size_t iteration = 0; iteration < options.iterations;
          ++iteration) {
       const auto base = make_base(options, random);
       const auto requests = make_additions(base, options.batch, random);
+      minimum_initial_edges = std::min(minimum_initial_edges, base.edges.size());
+      maximum_initial_edges = std::max(maximum_initial_edges, base.edges.size());
+      total_initial_edges += base.edges.size();
 
       delta::GraphState serial_result = base;
       serial_total += time_milliseconds([&] {
@@ -138,6 +145,17 @@ int main(int argc, char** argv) {
     std::cout << "nodes=" << options.nodes << '\n';
     std::cout << "batch_size=" << options.batch << '\n';
     std::cout << "iterations=" << checked << '\n';
+    std::cout << "initial_edges_min=" << minimum_initial_edges << '\n';
+    std::cout << "initial_edges_mean="
+              << static_cast<double>(total_initial_edges) /
+                     static_cast<double>(checked)
+              << '\n';
+    std::cout << "initial_edges_max=" << maximum_initial_edges << '\n';
+    std::cout << "final_edges_mean="
+              << static_cast<double>(total_initial_edges) /
+                         static_cast<double>(checked) +
+                     static_cast<double>(options.batch)
+              << '\n';
     std::cout << "serial_full_recomputations_ms=" << serial_total << '\n';
     std::cout << "one_batched_full_recomputation_ms=" << batch_total << '\n';
     std::cout << "speedup=" << serial_total / batch_total << '\n';

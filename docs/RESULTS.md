@@ -68,9 +68,16 @@ Command:
 One local release build produced:
 
 ```text
-serial_full_recomputations_ms=400.085
-one_batched_full_recomputation_ms=14.952
-speedup=26.759
+nodes=256
+batch_size=32
+iterations=20
+initial_edges_min=422
+initial_edges_mean=491.850
+initial_edges_max=532
+final_edges_mean=523.850
+serial_full_recomputations_ms=390.097
+one_batched_full_recomputation_ms=15.081
+speedup=25.866
 ```
 
 This is only a sanity check of repeated work, not a performance claim. It compares 32 complete reachability recomputations with one complete recomputation. It does not include a parallel scheduler, incremental metadata, or DomLock.
