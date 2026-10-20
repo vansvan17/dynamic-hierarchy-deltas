@@ -89,3 +89,47 @@ This is only a sanity check of repeated work, not a performance claim. It compar
 - Independently computed metadata changes cannot generally be unioned.
 - A merge has to account for paths that appear or disappear only because several updates are present together.
 - Exact recomputation gives a working oracle for the next incremental version.
+
+## Million-scale sparse batch experiment
+
+The scalable engine uses CSR adjacency, applies the complete edge batch in one merge, and performs a full DAG check with Kahn's algorithm. The generated hierarchy is a rooted 4-ary tree with one extra forward parent for every eighth node. The main matrix keeps shared parents inside a top-level branch; four additional rows use cross-branch shared parents. It is a synthetic stress hierarchy, not an STMBench result.
+
+The experiment also constructs the actual dominator tree of the ordered DAG. This is separate from the primary-tree LCA heuristic: for a reachable DAG, the immediate dominator of a node is the deepest common dominator of all its predecessors. Root-selection counts below use this dominator tree, not the primary-parent tree.
+
+The experiment covers the sizes and update ratios requested for the final study. An update count is a percentage of the node count and is split evenly between additions and deletions. Every apply result below is the median of five runs from one local Apple clang 21 release build on arm64 macOS. These timings are preliminary machine-local measurements, not a comparative performance claim.
+
+| Nodes | Edges | Updates | Locality | Full validation + apply (ms) | CSR bytes per state |
+| ---: | ---: | ---: | --- | ---: | ---: |
+| 1,000,000 | 1,124,992 | 10,000 (1%) | global | 10.095 | 12,499,976 |
+| 1,000,000 | 1,124,992 | 100,000 (10%) | global | 12.305 | 12,499,976 |
+| 5,000,000 | 5,624,916 | 50,000 (1%) | global | 64.226 | 62,499,672 |
+| 5,000,000 | 5,624,916 | 500,000 (10%) | global | 85.172 | 62,499,672 |
+| 10,000,000 | 11,249,915 | 100,000 (1%) | global | 146.276 | 124,999,668 |
+| 10,000,000 | 11,249,915 | 1,000,000 (10%) | global | 190.445 | 124,999,668 |
+
+The complete 18-row main matrix, plus four cross-branch-sharing checks, is in [SCALE_RESULTS.csv](SCALE_RESULTS.csv). It includes graph and dominator construction, batch generation, peak process RSS, local workloads, and intermediate ratios.
+
+### Root-selection observation
+
+Treating the entire batch as one request selected the root in all 22 configurations. This happened even for the local request workload because one batch contains work from several top-level branches.
+
+Partitioning tells a more precise story. With shared parents restricted to their top-level branch, 31.1%--37.2% of globally paired updates had the root as their true dominator-tree LCA. Constraining each added edge to one top-level subtree reduced this to 0%; the batch separated into four non-root groups. But with cross-branch shared parents, locality in the primary tree was not enough: 49.2%--52.6% of local updates still selected the root, and global updates reached 54.3%--54.9%.
+
+This suggests a concrete next mechanism:
+
+1. partition a batch by a cached **actual dominator**, using primary-tree locality only as a cheap first filter;
+2. prepare disjoint top-level groups concurrently;
+3. merge their structural and metadata deltas; and
+4. fall back to a larger lock only for cross-group updates or failed validation.
+
+The result does **not** yet show parallel speedup. It shows why taking one dominator for the entire batch is too coarse, and it also shows a failure mode for naïve locality: cross-branch sharing can collapse apparently local work back to the root.
+
+### Correctness checks added with the scalable path
+
+- strict edge preconditions and duplicate normalization;
+- rejection of a cycle created only by the combined batch;
+- exact sparse-vs-transitive-closure comparison on hand-written cases;
+- 200 deterministic randomized sparse-vs-exact comparisons;
+- hand-checked immediate-dominator and dominator-LCA cases;
+- global and local batch-generation checks; and
+- the existing independent Python/C++ and exhaustive five-node checks.

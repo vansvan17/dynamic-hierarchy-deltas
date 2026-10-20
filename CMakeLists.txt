@@ -7,7 +7,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 option(DELTA_ENABLE_WARNINGS "Enable strict compiler warnings" ON)
 
-add_library(delta_model src/model.cpp)
+add_library(delta_model src/model.cpp src/scalable.cpp)
 target_include_directories(delta_model PUBLIC include)
 
 if(DELTA_ENABLE_WARNINGS)
@@ -30,10 +30,17 @@ target_link_libraries(delta_benchmark PRIVATE delta_model)
 add_executable(delta_cli apps/delta_cli.cpp)
 target_link_libraries(delta_cli PRIVATE delta_model)
 
+add_executable(delta_scale_experiment apps/scale_experiment.cpp)
+target_link_libraries(delta_scale_experiment PRIVATE delta_model)
+
 enable_testing()
 add_executable(delta_tests tests/test_model.cpp)
 target_link_libraries(delta_tests PRIVATE delta_model)
 add_test(NAME delta_tests COMMAND delta_tests)
+
+add_executable(delta_scalable_tests tests/test_scalable.cpp)
+target_link_libraries(delta_scalable_tests PRIVATE delta_model)
+add_test(NAME delta_scalable_tests COMMAND delta_scalable_tests)
 
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
 add_test(
@@ -48,7 +55,8 @@ add_test(
 )
 
 if(DELTA_ENABLE_WARNINGS)
-  foreach(target delta_demo delta_exhaustive delta_benchmark delta_cli delta_tests)
+  foreach(target delta_demo delta_exhaustive delta_benchmark delta_cli
+                 delta_scale_experiment delta_tests delta_scalable_tests)
     if(MSVC)
       target_compile_options(${target} PRIVATE /W4 /permissive-)
     else()

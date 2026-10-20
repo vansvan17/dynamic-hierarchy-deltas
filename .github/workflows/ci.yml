@@ -17,3 +17,5 @@ jobs:
         run: ctest --test-dir build --output-on-failure
       - name: Exhaustive four-node check
         run: ./build/delta_exhaustive 4
+      - name: Sparse engine smoke test
+        run: ./build/delta_scale_experiment 100000 0.10 local 17 full 1 local-sharing
