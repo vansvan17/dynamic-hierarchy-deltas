@@ -1,41 +1,22 @@
 # Dynamic Hierarchy Deltas
 
-This repository studies batched additions and deletions in a dynamic directed acyclic hierarchy. I am keeping the update engine independent of DomLock for now so that its semantics and scaling can be tested before lock metadata is added.
+Batched edge additions and deletions on a rooted DAG, and k-bounded interval-set metadata for hierarchical locking (the "delayed interval merging" idea in `../paper/main.tex`). Exploratory research code, not a novelty claim or a production implementation.
 
-The repository now has three pieces:
+Two files:
 
-- a small exact C++20 model used as a correctness oracle;
-- a sparse C++20 engine for million-scale hierarchies; and
-- a small Python oracle used to check the C++ results independently.
+- `dh.hpp`: the library
+  - an **exact model** for small graphs: reachability as one bitmask row per node, n ≤ 32;
+  - a **sparse engine**: CSR graphs, one-merge batch apply, acyclicity and rootedness checks, a dominator tree for node-ordered DAGs, and a synthetic hierarchy and batch generator;
+  - **interval sets**: one immutable post-order label per node, at most k disjoint ranges per node, closest-gap merging, full build, and a one-pass batch repair.
+- `main.cpp`: one binary, `dh`, with four modes:
+  - `test`: unit tests;
+  - `exhaustive [N]`: every pair of single-edge updates on every DAG with N ≤ 5 nodes;
+  - `cli`: the interface used by the Python oracle;
+  - `scale`: the million-node experiment.
 
-This is exploratory work. It is not a novelty claim or a production implementation.
-
-## Exact model
-
-A committed state contains a fixed vertex set, a DAG edge set, exact transitive closure, and a version number.
-
-Each update has four explicit stages:
-
-1. `prepare_delta` creates a private candidate state and records reachability additions, removals, and a conservative dependency region.
-2. `validate_delta` checks the base version, edge preconditions, self-loops, cycles, and metadata consistency.
-3. `merge_deltas` combines deltas prepared on the same version and recomputes exact metadata on the combined graph.
-4. `apply_delta` publishes a validated delta as the next version.
-
-The complete transitive-closure recomputation is deliberately slow. It gives a reference answer for testing a later affected-region algorithm.
-
-## Sparse batch engine
-
-The scalable path stores the graph in compressed sparse row (CSR) form. A batch is normalized, checked against the base graph, merged into one candidate CSR graph, and validated as a DAG. Full validation uses Kahn's algorithm. An optional ordered fast path is available only when node identifiers are already a trusted topological order.
-
-The engine does not materialize transitive closure. Its graph storage is approximately `8 * (V + 1) + 4 * E` bytes, excluding allocator bookkeeping. The exact model remains the oracle for small cases; 200 deterministic randomized tests compare the sparse result against it.
+`oracle/` is an independent Python model. It does not call the C++ code.
 
 ## Build and test
-
-Requirements:
-
-- a C++20 compiler;
-- CMake 3.20 or newer; and
-- Python 3 for the independent cross-check.
 
 ```sh
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
@@ -43,90 +24,51 @@ cmake --build build -j
 ctest --test-dir build --output-on-failure
 ```
 
-`ctest` runs the C++ unit tests and 150 deterministic C++/Python cross-check cases.
+`ctest` runs three suites:
+- the unit tests;
+- the exhaustive five-node check;
+- 150 C++/Python cross-check cases.
 
-## Run the million-scale matrix
+## What each check establishes
 
-```sh
-./scripts/run_scale_matrix.sh
-```
+- **Exhaustive (`./build/dh exhaustive 5`).** It enumerates all 1,024 DAGs consistent with one five-node topological order. It prepares every valid single-edge addition and deletion (14,167) and examines every pair (93,283).
+  - Merged outcomes match both atomic serial orders in every case.
+  - Naive union of the private reachability deltas is wrong in 21,294 of 86,118 jointly valid pairs, and in none of the 4,030 conservatively disjoint pairs.
+  - For k = 1, 2 and 3, it also repairs interval metadata after each of the 100,285 valid batches (single edges and pairs). It checks the invariant and counts false negatives (must be 0) and false overlaps, against both exact reachability and a full rebuild.
+- **Cross-check (`python3 oracle/crosscheck_cpp.py --binary build/dh --cases 500 --nodes 6 --seed 17`).** It compares edge sets, reachability, validity, the naive-union result and serial agreement with the Python model.
+- **Unit tests.** They cover:
+  - the emergent-path, diamond and joint-cycle cases;
+  - the precondition, cycle and rootedness rejections;
+  - a hand-checked dominator tree;
+  - 200 random batches comparing the sparse engine with the exact model;
+  - generated batches staying rooted;
+  - the online versus offline merge example (12 vs 11 falsely covered labels);
+  - 300 random repairs keeping the invariant.
 
-The matrix covers 1, 5, and 10 million nodes; update batches of 1%, 5%, and 10% of the node count; global and subtree-local update pairs; and full DAG validation. Each reported apply time is the median of five runs. Raw results are in [docs/SCALE_RESULTS.csv](docs/SCALE_RESULTS.csv), with interpretation in [docs/RESULTS.md](docs/RESULTS.md).
-
-A single configuration can be run as:
-
-```sh
-./build/delta_scale_experiment 10000000 0.10 global 17 full 5 local-sharing
-```
-
-## Run the examples
-
-```sh
-./build/delta_demo
-```
-
-The examples cover disjoint additions, overlapping additions, a jointly created cycle, deletion of the last two reachability witnesses, and an emergent path created by two insertions.
-
-## Run the exhaustive checker
+## Scale matrix
 
 ```sh
-./build/delta_exhaustive 5
+./scripts/run_scale_matrix.sh ./build/dh 17 4 > docs/SCALE_RESULTS.csv
+./build/dh scale 10000000 0.10 global 17 5 local-sharing 4   # one configuration
+c++ -std=c++20 -O3 -I. scripts/k_split.cpp -o build/k_split && ./build/k_split   # repair work by update kind
 ```
 
-This enumerates every base DAG consistent with one fixed five-node topological order and examines every pair of distinct, individually valid single-edge deltas.
+**Graph:** a 4-ary tree plus an extra earlier parent for every eighth node, 1–10 million nodes. Extra parents either stay within the node's top-level branch (`local-sharing`) or not (`cross-sharing`).
 
-The current five-node run checks 93,283 pair outcomes. The exact merged outcome agrees with the atomic serial oracle in every case. A naïve union of the private metadata changes is wrong in 21,294 jointly valid cases. Details are in [docs/RESULTS.md](docs/RESULTS.md).
+**Batch:** 1–10% of the node count, split evenly between additions and deletions.
+- Additions are forward edges (`global` or within one top-level branch for `local`), so they can never create a cycle.
+- A deletion removes a node's primary parent edge only when the node has a second parent, at most once per node, so every batch keeps the hierarchy rooted.
 
-## Run the independent cross-check
-
-```sh
-python3 oracle/crosscheck_cpp.py \
-  --binary build/delta_cli \
-  --cases 500 \
-  --nodes 6 \
-  --seed 17
-```
-
-The Python code does not call into the C++ library. It computes the expected edge set, reachability, validity, naïve-union result, and two atomic serial orders separately, then compares them with the C++ command-line output.
-
-## Run the exploratory benchmark
-
-```sh
-./build/delta_benchmark \
-  --nodes 256 \
-  --batch 32 \
-  --iterations 20 \
-  --edge-probability 0.015 \
-  --seed 7
-```
-
-The benchmark compares full reachability recomputation after every insertion with one full recomputation after applying the complete batch. It measures the amount of repeated work batching can avoid; it does not yet measure concurrent delta preparation or DomLock integration.
-
-## Repository layout
-
-```text
-include/delta/model.hpp   public C++ model API
-include/delta/scalable.hpp sparse graph and batch API
-src/model.cpp             exact implementation
-src/scalable.cpp          CSR batch implementation
-apps/demo.cpp             hand-checked examples
-apps/exhaustive.cpp       exhaustive small-DAG checker
-apps/benchmark.cpp        repeated-work benchmark
-apps/delta_cli.cpp        interface used by the Python cross-check
-apps/scale_experiment.cpp million-scale experiment driver
-oracle/                   independent Python reference model
-tests/                    C++ unit tests
-docs/RESULTS.md           current observations and counts
-docs/STMBENCH_MAPPING.md  source-level mapping to the supplied artifact
-```
+**Reported per configuration:**
+- the median of five timed applies (merge, Kahn's acyclicity check, rootedness check);
+- dominator statistics on the base graph and on the graph plus the additions;
+- interval-set metadata with budget k: the time to build labels and sets, one batch repair (nodes visited and changed) and a full rebuild on the updated graph.
 
 ## Current limits
 
-- fixed vertex set;
-- strict add and delete preconditions;
-- atomic publication of the whole batch;
-- sparse structural state, but no DomLock or MID interval maintenance yet;
-- no active-lock semantics yet; and
-- no parallel execution yet.
+- fixed vertex set, edge updates only, rooted DAGs only;
+- sequential: no concurrent groups, lock pool or publication protocol yet;
+- additions in the generator are forward-only, and dominators assume node order is topological;
+- one machine.
 
-The next step is to add the actual metadata delta and affected-region repair on top of the sparse structural engine, then integrate that path with DomLock's interval maintenance. The full hierarchy is already large enough for the requested 1--10 million-node stress tests.
+The previous multi-file implementation is kept in `../dynamic-hierarchy-deltas.before-simplify-2026-11-05/` for reference.
