@@ -34,6 +34,7 @@ def parse_edges(text: str) -> frozenset[tuple[int, int]]:
 def run_cpp(binary: Path, node_count: int, base, left: Request, right: Request):
     command = [
         str(binary),
+        "cli",
         str(node_count),
         edge_text(base),
         edge_text(left.additions),
@@ -60,7 +61,7 @@ def random_base(node_count: int, probability: float, rng: random.Random):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--binary", type=Path, default=Path("build/delta_cli"))
+    parser.add_argument("--binary", type=Path, default=Path("build/dh"))
     parser.add_argument("--cases", type=int, default=300)
     parser.add_argument("--nodes", type=int, default=6)
     parser.add_argument("--seed", type=int, default=17)

@@ -1,3 +1,5 @@
+> **Superseded (5 Nov 2026).** The scale numbers below came from batches whose deletions disconnected most subtrees from the root. See `RESULTS.md` for the current numbers.
+
 # Batched Dynamic Hierarchy Updates: Current Milestone
 
 I replaced the exact transitive-closure path with a separate sparse C++ engine for the large experiments. The old implementation is still used as the oracle on small graphs.

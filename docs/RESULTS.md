@@ -1,47 +1,51 @@
-# Current Results
+# Current Results (5 Nov 2026)
 
-## Five node exhaustive check
+All numbers come from the single-binary rewrite (`dh.hpp`, `main.cpp`). Every timing was taken on one Apple-silicon macOS machine with Apple clang in a Release build. These are machine-local measurements, not comparative performance claims.
 
-Command:
+## Rewrite check
 
-```sh
-./build/delta_exhaustive 5
-```
+The rewrite reproduces the old implementation's outputs exactly:
+- every counter of `delta_exhaustive 5` (pairs, validity, serial agreement, naive-union failures by kind and by disjointness);
+- the full output of the 500-case Python cross-check.
 
-The checker enumerates 1,024 base DAGs consistent with a fixed topological order and prepares every valid single-edge addition and deletion. It then examines every pair that mutates distinct edges.
+The old code is in `../../dynamic-hierarchy-deltas.before-simplify-2026-11-05/`.
+
+## Exhaustive five-node check
+
+`./build/dh exhaustive 5` enumerates the 1,024 DAGs consistent with one fixed five-node topological order, every valid single-edge addition and deletion, and every pair of them.
 
 | Result | Count |
 | --- | ---: |
-| Individually valid deltas across all base graphs | 14,167 |
+| Individually valid deltas | 14,167 |
 | Delta pairs examined | 93,283 |
 | Pair outcomes matching both atomic serial orders | 93,283 |
-| Jointly valid pairs | 86,118 |
-| Jointly invalid pairs | 7,165 |
-| Conservatively disjoint pairs | 4,030 |
-| Overlapping pairs | 89,253 |
-| Valid pairs where naïve metadata union was wrong | 21,294 |
-| Wrong unions for two additions | 5,806 |
-| Wrong unions for an addition and deletion | 13,152 |
-| Wrong unions for two deletions | 2,336 |
-| Wrong unions among conservatively disjoint pairs | 0 |
+| Jointly valid / jointly invalid pairs | 86,118 / 7,165 |
+| Conservatively disjoint / overlapping pairs | 4,030 / 89,253 |
+| Valid pairs where naive union of reachability deltas was wrong | 21,294 |
+| ... two additions / addition and deletion / two deletions | 5,806 / 13,152 / 2,336 |
+| ... among conservatively disjoint pairs | 0 |
 
-All jointly invalid pairs in this search were two-addition cases. The smallest example is adding `0 -> 1` and `1 -> 0` to an empty graph. Each addition is valid alone, but the combined graph contains a cycle.
+All jointly invalid pairs are two-addition cycles (the smallest is `0 -> 1` with `1 -> 0`). The smallest metadata interaction is the chain `0 -> 1` plus `1 -> 2`, which creates `0 -> 2` in neither private delta. The deletion counterpart is the diamond.
 
-The smallest metadata interaction is also an insertion case. Adding `0 -> 1` and `1 -> 2` creates `0 -> 2`, but that reachability pair occurs in neither private delta. The corresponding deletion example is a diamond: neither branch deletion removes source-to-target reachability alone, while both deletions together do.
+### Interval metadata on the same cases
+
+For each of the 100,285 valid batches (14,167 single edges and 86,118 jointly valid pairs), and for k = 1, 2, 3, the check does four things:
+1. labels the base graph by DFS post-order;
+2. builds the sets;
+3. applies the batch and repairs the sets in one pass;
+4. compares the result against exact reachability and against a full rebuild on the updated graph.
+
+| k | False negatives | Invariant failures | False overlaps, repaired | False overlaps, rebuilt | Batches where repair was less precise |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 0 | 0 | 38,145 | 38,145 | 0 |
+| 2 | 0 | 0 | 1,060 | 1,050 | 10 |
+| 3 | 0 | 0 | 0 | 0 | 0 |
+
+The soundness result is what this check is for: no shared descendant was ever missed, and local subsumption held after every repair. Five-node graphs are far too small to measure precision; with every node labelled, three ranges almost always represent a five-node set exactly. The 10 batches at k = 2 where repair was less precise than a rebuild are the online-versus-offline effect: the repair keeps an old merge that a fresh compression would not make. The unit test with points 0, 5, 20, 9, 13, 17 shows the same effect (12 versus 11 falsely covered labels).
 
 ## Independent C++ and Python check
 
-Command:
-
-```sh
-python3 oracle/crosscheck_cpp.py \
-  --binary build/delta_cli \
-  --cases 500 \
-  --nodes 6 \
-  --seed 17
-```
-
-Result:
+`python3 oracle/crosscheck_cpp.py --binary build/dh --cases 500 --nodes 6 --seed 17` gives:
 
 ```text
 cases=500
@@ -52,84 +56,90 @@ valid_cases_where_naive_union_failed=119
 cpp_python_mismatches=0
 ```
 
-## Exploratory repeated work benchmark
+## Million-scale matrix
 
-Command:
+`./scripts/run_scale_matrix.sh ./build/dh 17 4` produces `SCALE_RESULTS.csv`, with k = 4. The hierarchy is a 4-ary tree with one extra, earlier parent for every eighth node. The extra parent stays inside the node's top-level branch (`local-sharing`) or not (`cross-sharing`).
 
-```sh
-./build/delta_benchmark \
-  --nodes 256 \
-  --batch 32 \
-  --iterations 20 \
-  --edge-probability 0.015 \
-  --seed 7
-```
+**Generator change (5 Nov 2026).** Additions are forward edges, uniform (`global`) or within one top-level branch (`local`). The earlier generator deleted primary-parent edges of uniformly chosen nodes, and about 7 in 8 of those nodes had no other parent, so most "valid" batches cut subtrees off from the root. Deletions now remove the primary parent edge only of a node that has a second parent, at most once per node, and apply rejects any batch that leaves a node unreachable. **Every number below replaces the earlier scale results.**
 
-One local release build produced:
+### Structural apply
 
-```text
-nodes=256
-batch_size=32
-iterations=20
-initial_edges_min=422
-initial_edges_mean=491.850
-initial_edges_max=532
-final_edges_mean=523.850
-serial_full_recomputations_ms=390.097
-one_batched_full_recomputation_ms=15.081
-speedup=25.866
-```
+Apply means: merge the batch into one CSR, run Kahn's acyclicity check, and check rootedness by DFS from the root. Each value is the median of five runs.
 
-This is only a sanity check of repeated work, not a performance claim. It compares 32 complete reachability recomputations with one complete recomputation. It does not include a parallel scheduler, incremental metadata, or DomLock.
+| Nodes | Edges | Updates | Global (ms) | Local (ms) | CSR bytes |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 1,000,000 | 1,124,992 | 10,000 (1%) | 16.7 | 27.9 | 12,499,976 |
+| 1,000,000 | 1,124,992 | 100,000 (10%) | 22.6 | 18.2 | 12,499,976 |
+| 5,000,000 | 5,624,916 | 50,000 (1%) | 108.8 | 108.2 | 62,499,672 |
+| 5,000,000 | 5,624,916 | 500,000 (10%) | 125.1 | 116.4 | 62,499,672 |
+| 10,000,000 | 11,249,915 | 100,000 (1%) | 215.0 | 211.5 | 124,999,668 |
+| 10,000,000 | 11,249,915 | 1,000,000 (10%) | 336.9 | 267.9 | 124,999,668 |
 
-## What the results currently support
+These are higher than the old 146–190 ms at 10M nodes. The old figures had no rootedness check and used different (unrooted) batches. Run-to-run spread on this machine is large (the 1M local 1% row is above its 10% row), so treat differences under about 1.5x as noise.
 
-- Conservative disjointness is useful as a cheap sufficient case.
-- Overlap by itself is not a reason to serialize.
-- Independently computed metadata changes cannot generally be unioned.
-- A merge has to account for paths that appear or disappear only because several updates are present together.
-- Exact recomputation gives a working oracle for the next incremental version.
+### Dominator-based partitioning
 
-## Million-scale sparse batch experiment
+| Sharing | Locality | Root share, all mutations (base dominators) | Root share, base plus additions | Root share, additions only |
+| --- | --- | ---: | ---: | ---: |
+| local | global | 0.31–0.37 | 0.32–0.42 | 0.62–0.74 |
+| local | local | 0 | 0 | 0 |
+| cross | global | 0.96–0.97 | 0.96–0.97 | 0.96–0.98 |
+| cross | local | 0.91–0.95 | 0.91–0.95 | 0.88–0.93 |
 
-The scalable engine uses CSR adjacency, applies the complete edge batch in one merge, and performs a full DAG check with Kahn's algorithm. The generated hierarchy is a rooted 4-ary tree with one extra forward parent for every eighth node. The main matrix keeps shared parents inside a top-level branch; four additional rows use cross-branch shared parents. It is a synthetic stress hierarchy, not an STMBench result.
+Five observations:
+- **One dominator for the whole batch is the root in all 22 configurations.**
+- **Local workload with local sharing: 0% by construction.** Both endpoints of every update lie in one top-level branch, and that branch's root dominates it.
+- **Global workload with local sharing:** 62–74% of additions have the root as their dominator-tree LCA. The all-mutation figure is lower only because deletions of a primary parent edge almost never select the root.
+- **Cross sharing makes nearly every update a root update,** additions included (88–98%), even when the update stays within one primary-tree branch. The earlier report of 49–55% averaged roughly 96% for additions with a low rate for the old deletions. Primary-tree locality is not a usable partition key once sharing crosses branches.
+- **Base-graph dominators understate root selection.** With the dominators of the base graph plus the additions, which dominate in both the old and the new graph, the global root share rises from 0.37 to 0.42 at 5M nodes and 10% updates. The partition analysis has to use the union graph.
 
-The experiment also constructs the actual dominator tree of the ordered DAG. This is separate from the primary-tree LCA heuristic: for a reachable DAG, the immediate dominator of a node is the deepest common dominator of all its predecessors. Root-selection counts below use this dominator tree, not the primary-parent tree.
+### Interval repair versus full rebuild (k = 4)
 
-The experiment covers the sizes and update ratios requested for the final study. An update count is a percentage of the node count and is split evenly between additions and deletions. Every apply result below is the median of five runs from one local Apple clang 21 release build on arm64 macOS. These timings are preliminary machine-local measurements, not a comparative performance claim.
+Columns:
+- `repair_ms`: one pass over the batch's ancestors in G′.
+- `repair_prep_ms`: topological order and parent index of G′; a real system would maintain these.
+- `rebuild_ms`: recompute every set from the labels on G′, with labels kept fixed, so this is cheaper than a true DomLock renumbering.
+- Repair and rebuild are single runs.
 
-| Nodes | Edges | Updates | Locality | Full validation + apply (ms) | CSR bytes per state |
-| ---: | ---: | ---: | --- | ---: | ---: |
-| 1,000,000 | 1,124,992 | 10,000 (1%) | global | 10.095 | 12,499,976 |
-| 1,000,000 | 1,124,992 | 100,000 (10%) | global | 12.305 | 12,499,976 |
-| 5,000,000 | 5,624,916 | 50,000 (1%) | global | 64.226 | 62,499,672 |
-| 5,000,000 | 5,624,916 | 500,000 (10%) | global | 85.172 | 62,499,672 |
-| 10,000,000 | 11,249,915 | 100,000 (1%) | global | 146.276 | 124,999,668 |
-| 10,000,000 | 11,249,915 | 1,000,000 (10%) | global | 190.445 | 124,999,668 |
+| Nodes | Updates | Repair (ms) | Prep (ms) | Rebuild (ms) | Nodes changed |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 1M | 1% | 16–18 | ~12 | 101–110 | ~30,000 |
+| 1M | 10% | 59–65 | ~12 | 101–110 | ~158,000 |
+| 10M | 1% | 167–173 | ~180 | 1,028–1,089 | ~300,000 |
+| 10M | 10% | 670–677 | ~205 | 1,203–1,248 | ~1,580,000 |
 
-The complete 18-row main matrix, plus four cross-branch-sharing checks, is in [SCALE_RESULTS.csv](SCALE_RESULTS.csv). It includes graph and dominator construction, batch generation, peak process RSS, local workloads, and intermediate ratios.
+At 1% updates, repair plus prep is about 3x cheaper than a rebuild at 10M nodes. At 10% it is about 1.4x cheaper. So E5 in `../paper/REVIEW_2026-11-02.md` (rebuild beats repair at ≥ 1%) is **not** supported on this graph at k = 4, but the margin at 10% is small and comes from single runs. Each node holds 1.26–1.35 ranges on average.
 
-### Root-selection observation
+### Budget sweep
 
-Treating the entire batch as one request selected the root in all 22 configurations. This happened even for the local request workload because one batch contains work from several top-level branches.
+`K_SWEEP.csv` covers 10M nodes, global workload, local sharing, mixed batches (half additions, half deletions), single runs. The k = 4 rows are the matching rows of `SCALE_RESULTS.csv`.
 
-Partitioning tells a more precise story. With shared parents restricted to their top-level branch, 31.1%--37.2% of globally paired updates had the root as their true dominator-tree LCA. Constraining each added edge to one top-level subtree reduced this to 0%; the batch separated into four non-root groups. But with cross-branch shared parents, locality in the primary tree was not enough: 49.2%--52.6% of local updates still selected the root, and global updates reached 54.3%--54.9%.
+| k | Updates | Nodes changed by repair | Repair (ms) | Mean ranges per node |
+| ---: | ---: | ---: | ---: | ---: |
+| 1 | 1% | 231,153 | 119 | 1.00 |
+| 2 | 1% | 278,086 | 222 | 1.15 |
+| 4 | 1% | 304,912 | 167 | 1.26 |
+| 8 | 1% | 318,635 | 231 | 1.35 |
+| 1 | 10% | 1,322,283 | 665 | 1.00 |
+| 2 | 10% | 1,537,070 | 641 | 1.20 |
+| 4 | 10% | 1,585,402 | 670 | 1.35 |
+| 8 | 10% | 1,591,577 | 742 | 1.47 |
 
-This suggests a concrete next mechanism:
+Per mixed batch, 38% more nodes change at k = 8 than at k = 1 (1% updates). Splitting by update kind (`scripts/k_split.cpp`: same graph, 100,000 updates of one kind) shows where that comes from:
 
-1. partition a batch by a cached **actual dominator**, using primary-tree locality only as a cheap first filter;
-2. prepare disjoint top-level groups concurrently;
-3. merge their structural and metadata deltas; and
-4. fall back to a larger lock only for cross-group updates or failed validation.
+| k | Nodes changed, additions only | Nodes changed, deletions only |
+| ---: | ---: | ---: |
+| 1 | 345,458 | 69,174 |
+| 2 | 360,919 | 157,306 |
+| 4 | 370,067 | 214,166 |
+| 8 | 374,332 | 248,937 |
 
-The result does **not** yet show parallel speedup. It shows why taking one dominator for the entire batch is too coarse, and it also shows a failure mode for naïve locality: cross-branch sharing can collapse apparently local work back to the root.
+- **Insertion propagation grows only 8% from k = 1 to k = 8.** The review predicted this direction (F3: fragment sets propagate what a hull absorbs), but the effect is small on this hierarchy.
+- **Most of the growth is deletion repair (3.6x).** With more ranges there is more precision to win back, so more ancestors shrink. That is extra work, but it buys precision.
+- **Neither result supports "delayed merging reduces propagation".**
 
-### Correctness checks added with the scalable path
+## Not measured yet
 
-- strict edge preconditions and duplicate normalization;
-- rejection of a cycle created only by the combined batch;
-- exact sparse-vs-transitive-closure comparison on hand-written cases;
-- 200 deterministic randomized sparse-vs-exact comparisons;
-- hand-checked immediate-dominator and dominator-LCA cases;
-- global and local batch-generation checks; and
-- the existing independent Python/C++ and exhaustive five-node checks.
+- Precision (the false-overlap rate) on graphs large enough to matter. It needs exact reachability for ground truth, which is feasible up to a few thousand nodes with bitsets.
+- The MID baselines, a DomLock adapter, lock-pool simulation, concurrent groups, and STMBench7.
+- Timing spread on repair and rebuild, and a second machine.
