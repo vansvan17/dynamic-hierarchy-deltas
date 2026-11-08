@@ -146,13 +146,14 @@ Per mixed batch, 38% more nodes change at k = 8 than at k = 1 (1% updates). Spli
 - **Pairs:** 200,000 per run, either uniform or within one top-level branch. More than 99% of sampled pairs truly do not conflict.
 - **Runs:** five batch seeds for each configuration, batches of 1% or 10% updates (mixed, additions only or deletions only), k = 1, 2, 4 and 8.
 
-Each batch is scored in four states on the same pairs:
+Each batch is scored in five states on the same pairs:
 - **base:** sets built on G, before the batch;
 - **repair:** the base sets after one-pass repair, keeping the labels of G;
 - **rebuild:** sets rebuilt on G′ from the labels of G;
-- **relabel:** fresh post-order labels on G′, with sets built from them (closest to renumbering from scratch).
+- **relabel:** fresh post-order labels on G′, with sets built from them (closest to renumbering from scratch);
+- **eager:** the base sets repaired after every single update, in a random order, with the labels of G (added 9 Nov; no delaying across the batch).
 
-**No false negatives in any of the 960 runs (about 768 million pair checks).**
+**No false negatives in any of the 960 runs (about 960 million pair checks across the five states).**
 
 At 16,384 nodes, with mixed batches and uniform pairs (mean of five seeds):
 
@@ -177,7 +178,7 @@ At 16,384 nodes, with mixed batches and uniform pairs (mean of five seeds):
 
 What this shows, on these graphs only:
 - **The budget is what matters.** Each doubling of k cuts false conflicts by roughly 2–3.5x. From k = 1 to k = 8, repaired false conflicts fall 19–27x, while the nodes changed by repair rise 15–62%.
-- **More propagation went with fewer false conflicts, not more.** Across budgets the two move in opposite directions. Within one budget, the batches that propagate more are the larger ones, which also leave more false conflicts, so the two are confounded there. A within-batch comparison of eager versus delayed merging would need an eager-widening variant that does not exist yet.
+- **Across budgets, more propagation went with fewer false conflicts.** Raising k makes repair change more nodes and leaves fewer false conflicts. The eager comparison below holds k fixed.
 - **One-pass repair loses almost nothing against a rebuild with the same labels.** The largest difference in any configuration is 0.05 percentage points.
 - **The remaining loss is label drift.** Keeping the labels of G costs precision after additions (16,384 nodes, 10% additions, k = 4, cross sharing: 3.5% repaired versus 2.7% relabelled). Deletions lower the rate, and fresh labels lower it further. How often to relabel is a real design question.
 - **Rates barely change between 4,096 and 16,384 nodes** (see the CSV). That is a hint, not evidence, about 10 million nodes.
@@ -186,9 +187,31 @@ Caveats:
 - These are pairwise overlaps. Lock-pool conflicts, real access patterns (STMBench7) and DomLock's leaf-only labels are not modelled.
 - Uniform pairs under a 4-ary tree are rarely related, which is why more than 99% of pairs are non-conflicting.
 
+### Delayed (one batch repair) versus eager (one repair per update), 9 Nov 2026
+
+Same batches, same budget, same final graph. "Changed" and "visited" are summed over all single-update repairs for eager. 16,384 nodes, uniform pairs, mean of five seeds:
+
+| Sharing | Batch | k | False conflicts, delayed | False conflicts, eager | Changed, delayed | Changed, eager | Eager / delayed |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| local | 1% mixed | 1 | 4.57% | 4.57% | 383 | 467 | 1.22 |
+| local | 1% mixed | 8 | 0.17% | 0.17% | 505 | 809 | 1.60 |
+| local | 10% mixed | 1 | 11.62% | 11.62% | 2,263 | 3,362 | 1.49 |
+| local | 10% mixed | 4 | 1.25% | 1.25% | 2,603 | 6,028 | 2.32 |
+| local | 10% mixed | 8 | 0.52% | 0.52% | 2,609 | 7,091 | 2.72 |
+| cross | 1% mixed | 1 | 12.22% | 12.22% | 303 | 349 | 1.15 |
+| cross | 1% mixed | 8 | 0.62% | 0.62% | 491 | 731 | 1.49 |
+| cross | 10% mixed | 1 | 16.52% | 16.52% | 2,091 | 2,901 | 1.39 |
+| cross | 10% mixed | 4 | 2.03% | 2.04% | 2,594 | 5,598 | 2.16 |
+| cross | 10% mixed | 8 | 0.89% | 0.89% | 2,603 | 6,750 | 2.59 |
+
+- **Delaying across a batch does reduce propagation.** Over all configurations, eager repair changes 1.01–2.92x as many nodes and visits 1.03–3.69x as many. The saving grows with batch size and with k. Deletion-only batches at 1% gain almost nothing (1.01–1.22x).
+- **This qualifies the earlier note (6 Nov) that delayed merging "does not reduce propagation".** That compared budgets: a larger k propagates more. Against eager per-update repair at the same k, the batch propagates less.
+- **Less propagation did not buy fewer false conflicts.** Eager and delayed sets give the same false-conflict rate to within 2% relative (largest gap: 4,096 nodes, 10% additions, k = 4). With k = 1 they are identical. The online merge order barely matters here; the budget and the label drift decide precision.
+- **Caveats.** These are counts, not time; a real eager system would also redo its traversal order after each update, which is excluded here and would widen the gap. The random update order is one choice; adversarial orders were not tried.
+
 ## Not measured yet
 
 - Precision at million scale (needs sampled ground truth, for example per-pair BFS), and false conflicts under a lock-pool or STMBench7 access pattern.
-- An eager-widening baseline inside one batch, to test directly whether delaying merges reduces false conflicts.
+- Wall-clock cost of eager versus delayed repair at million scale.
 - The MID baselines, a DomLock adapter, lock-pool simulation, concurrent groups, and STMBench7.
 - Timing spread on repair and rebuild, and a second machine.

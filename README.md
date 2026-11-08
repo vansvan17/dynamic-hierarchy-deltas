@@ -51,7 +51,7 @@ ctest --test-dir build --output-on-failure
 ./scripts/run_scale_matrix.sh ./build/dh 17 4 > docs/SCALE_RESULTS.csv
 ./build/dh scale 10000000 0.10 global 17 5 local-sharing 4   # one configuration
 c++ -std=c++20 -O3 -I. scripts/k_split.cpp -o build/k_split && ./build/k_split   # repair work by update kind
-c++ -std=c++20 -O3 -I. scripts/precision.cpp -o build/precision && ./build/precision 5 > docs/PRECISION.csv   # false conflicts vs exact reachability
+c++ -std=c++20 -O3 -I. scripts/precision.cpp -o build/precision && ./build/precision 5 > docs/PRECISION.csv   # false conflicts vs exact reachability, delayed vs eager
 ```
 
 **Graph:** a 4-ary tree plus an extra earlier parent for every eighth node, 1–10 million nodes. Extra parents either stay within the node's top-level branch (`local-sharing`) or not (`cross-sharing`).
