@@ -138,8 +138,57 @@ Per mixed batch, 38% more nodes change at k = 8 than at k = 1 (1% updates). Spli
 - **Most of the growth is deletion repair (3.6x).** With more ranges there is more precision to win back, so more ancestors shrink. That is extra work, but it buys precision.
 - **Neither result supports "delayed merging reduces propagation".**
 
+## False conflicts against exact reachability (7 Nov 2026)
+
+`scripts/precision.cpp` writes `PRECISION.csv`. It keeps a descendant bitset per node, so it runs on 4,096 and 16,384 nodes only, using the same generator as the scale runs.
+- **Conflict:** two nodes truly conflict when they share a descendant (each node counts as its own descendant).
+- **False conflict:** the intervals overlap but the nodes share no descendant. The rate is false conflicts divided by truly non-conflicting pairs.
+- **Pairs:** 200,000 per run, either uniform or within one top-level branch. More than 99% of sampled pairs truly do not conflict.
+- **Runs:** five batch seeds for each configuration, batches of 1% or 10% updates (mixed, additions only or deletions only), k = 1, 2, 4 and 8.
+
+Each batch is scored in four states on the same pairs:
+- **base:** sets built on G, before the batch;
+- **repair:** the base sets after one-pass repair, keeping the labels of G;
+- **rebuild:** sets rebuilt on G′ from the labels of G;
+- **relabel:** fresh post-order labels on G′, with sets built from them (closest to renumbering from scratch).
+
+**No false negatives in any of the 960 runs (about 768 million pair checks).**
+
+At 16,384 nodes, with mixed batches and uniform pairs (mean of five seeds):
+
+| Sharing | Updates | k | Base | Repair | Rebuild | Relabel | Nodes changed by repair |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| local | 1% | 1 | 3.20% | 4.57% | 4.57% | 4.29% | 383 |
+| local | 1% | 2 | 0.95% | 1.25% | 1.25% | 1.21% | 455 |
+| local | 1% | 4 | 0.33% | 0.43% | 0.43% | 0.41% | 489 |
+| local | 1% | 8 | 0.14% | 0.17% | 0.17% | 0.16% | 505 |
+| local | 10% | 1 | 3.20% | 11.62% | 11.62% | 9.10% | 2,263 |
+| local | 10% | 2 | 0.95% | 3.46% | 3.46% | 2.68% | 2,547 |
+| local | 10% | 4 | 0.33% | 1.25% | 1.25% | 0.93% | 2,603 |
+| local | 10% | 8 | 0.14% | 0.52% | 0.52% | 0.39% | 2,609 |
+| cross | 1% | 1 | 11.38% | 12.22% | 12.22% | 11.45% | 303 |
+| cross | 1% | 2 | 3.53% | 3.79% | 3.78% | 3.55% | 395 |
+| cross | 1% | 4 | 1.29% | 1.38% | 1.38% | 1.30% | 459 |
+| cross | 1% | 8 | 0.58% | 0.62% | 0.62% | 0.58% | 491 |
+| cross | 10% | 1 | 11.38% | 16.52% | 16.52% | 12.27% | 2,091 |
+| cross | 10% | 2 | 3.53% | 5.44% | 5.43% | 3.86% | 2,501 |
+| cross | 10% | 4 | 1.29% | 2.03% | 2.03% | 1.39% | 2,594 |
+| cross | 10% | 8 | 0.58% | 0.89% | 0.89% | 0.60% | 2,603 |
+
+What this shows, on these graphs only:
+- **The budget is what matters.** Each doubling of k cuts false conflicts by roughly 2–3.5x. From k = 1 to k = 8, repaired false conflicts fall 19–27x, while the nodes changed by repair rise 15–62%.
+- **More propagation went with fewer false conflicts, not more.** Across budgets the two move in opposite directions. Within one budget, the batches that propagate more are the larger ones, which also leave more false conflicts, so the two are confounded there. A within-batch comparison of eager versus delayed merging would need an eager-widening variant that does not exist yet.
+- **One-pass repair loses almost nothing against a rebuild with the same labels.** The largest difference in any configuration is 0.05 percentage points.
+- **The remaining loss is label drift.** Keeping the labels of G costs precision after additions (16,384 nodes, 10% additions, k = 4, cross sharing: 3.5% repaired versus 2.7% relabelled). Deletions lower the rate, and fresh labels lower it further. How often to relabel is a real design question.
+- **Rates barely change between 4,096 and 16,384 nodes** (see the CSV). That is a hint, not evidence, about 10 million nodes.
+
+Caveats:
+- These are pairwise overlaps. Lock-pool conflicts, real access patterns (STMBench7) and DomLock's leaf-only labels are not modelled.
+- Uniform pairs under a 4-ary tree are rarely related, which is why more than 99% of pairs are non-conflicting.
+
 ## Not measured yet
 
-- Precision (the false-overlap rate) on graphs large enough to matter. It needs exact reachability for ground truth, which is feasible up to a few thousand nodes with bitsets.
+- Precision at million scale (needs sampled ground truth, for example per-pair BFS), and false conflicts under a lock-pool or STMBench7 access pattern.
+- An eager-widening baseline inside one batch, to test directly whether delaying merges reduces false conflicts.
 - The MID baselines, a DomLock adapter, lock-pool simulation, concurrent groups, and STMBench7.
 - Timing spread on repair and rebuild, and a second machine.
