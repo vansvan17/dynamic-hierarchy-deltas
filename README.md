@@ -53,6 +53,8 @@ ctest --test-dir build --output-on-failure
 c++ -std=c++20 -O3 -I. scripts/k_split.cpp -o build/k_split && ./build/k_split   # repair work by update kind
 c++ -std=c++20 -O3 -I. scripts/precision.cpp -o build/precision && ./build/precision 5 > docs/PRECISION.csv   # false conflicts vs exact reachability, delayed vs eager
 c++ -std=c++20 -O3 -I. scripts/precision_large.cpp -o build/precision_large && ./build/precision_large 10000000 3 200000 > docs/PRECISION_LARGE_10M.csv   # sampled exact pairs at scale
+c++ -std=c++20 -O3 -I. scripts/precision_depth.cpp -o build/precision_depth && ./build/precision_depth 1000000 3 20000 global > docs/PRECISION_DEPTH_1M.csv   # false conflicts by depth
+c++ -std=c++20 -O3 -I. scripts/range_count.cpp -o build/range_count && ./build/range_count 1000000 20 > docs/RANGE_COUNT_1M.csv   # exact ranges per node by level
 ```
 
 **Graph:** a 4-ary tree plus an extra earlier parent for every eighth node, 1–10 million nodes. Extra parents either stay within the node's top-level branch (`local-sharing`) or not (`cross-sharing`).
