@@ -209,9 +209,45 @@ Same batches, same budget, same final graph. "Changed" and "visited" are summed 
 - **Less propagation did not buy fewer false conflicts.** Eager and delayed sets give the same false-conflict rate to within 2% relative (largest gap: 4,096 nodes, 10% additions, k = 4). With k = 1 they are identical. The online merge order barely matters here; the budget and the label drift decide precision.
 - **Caveats.** These are counts, not time; a real eager system would also redo its traversal order after each update, which is excluded here and would widen the gap. The random update order is one choice; adversarial orders were not tried.
 
+## False conflicts at 1 and 10 million nodes (14 Nov 2026)
+
+`scripts/precision_large.cpp` answers each sampled pair exactly, without storing every node's descendants:
+1. mark the descendants of u;
+2. search from v until it reaches a marked node or runs out.
+
+It scores the base, repair, rebuild and relabel states from the previous section; eager is left out, because one repair per update would mean 10^4–10^6 full passes. Batches are mixed or additions only, at 1% and 10%.
+- **1M:** five seeds, 200,000 uniform and 200,000 in-branch pairs; `PRECISION_LARGE_1M.csv`; 67 s and 0.3 GB peak.
+- **10M:** three seeds, same pair counts; `PRECISION_LARGE_10M.csv`; 10 min and 2.6 GB peak.
+
+**Check against the exact harness.** At 16,384 nodes with the same seeds and pairs, all 64 rows match `PRECISION.csv` exactly.
+
+**No false negatives** in any of the 512 large runs.
+
+Repaired false-conflict rate, mixed batches, uniform pairs (16,384 from `PRECISION.csv`):
+
+| Sharing | Updates | k | 16,384 | 1M | 10M | 10M relabel |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| local | 1% | 1 | 4.57% | 4.85% | 5.84% | 5.56% |
+| local | 1% | 8 | 0.17% | 0.25% | 0.31% | 0.29% |
+| local | 10% | 1 | 11.62% | 11.76% | 12.71% | 10.63% |
+| local | 10% | 8 | 0.52% | 0.63% | 0.68% | 0.49% |
+| cross | 1% | 1 | 12.22% | 12.58% | 13.18% | 12.51% |
+| cross | 1% | 8 | 0.62% | 0.70% | 0.74% | 0.71% |
+| cross | 10% | 1 | 16.52% | 16.83% | 17.38% | 13.22% |
+| cross | 10% | 8 | 0.89% | 0.97% | 1.03% | 0.69% |
+
+- **The small-graph findings hold at 10 million nodes.**
+  - k = 8 has 12–20x fewer false conflicts than k = 1 across all mixed and addition configurations at 1M and 10M.
+  - Repair stays within 0.07 percentage points of a rebuild with the same labels.
+  - Fresh labels still recover part of the loss after additions.
+- **Rates rise slowly with size.** That is mostly the base hierarchy, before any update: with local sharing, base k = 1 goes from 3.2% at 16,384 nodes to 4.4% at 10M. At k = 8 the relative rise is larger (local 1%: 0.17% → 0.31%), though the absolute rates stay below about 1% everywhere.
+- **Run-to-run spread is small:** the standard deviation of the repaired rate is at most 0.1 percentage points at 1M.
+
+**Caveat: uniform pairs say little about the top of the hierarchy.** Searching a sampled pair touched only 24–54 nodes on average, so the samples are dominated by deep nodes with small subtrees. A lock workload that touches nodes near the root (DomLock's distributions) will see different rates. The next precision measurement should sample nodes by depth or by a lock-access distribution.
+
 ## Not measured yet
 
-- Precision at million scale (needs sampled ground truth, for example per-pair BFS), and false conflicts under a lock-pool or STMBench7 access pattern.
+- False conflicts under depth-weighted or lock-access sampling, a lock pool, or STMBench7.
 - Wall-clock cost of eager versus delayed repair at million scale.
 - The MID baselines, a DomLock adapter, lock-pool simulation, concurrent groups, and STMBench7.
 - Timing spread on repair and rebuild, and a second machine.
