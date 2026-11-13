@@ -236,18 +236,62 @@ Repaired false-conflict rate, mixed batches, uniform pairs (16,384 from `PRECISI
 | cross | 10% | 1 | 16.52% | 16.83% | 17.38% | 13.22% |
 | cross | 10% | 8 | 0.89% | 0.97% | 1.03% | 0.69% |
 
-- **The small-graph findings hold at 10 million nodes.**
+- **These are rates for uniform pairs, which are almost all deep nodes. Near the root the picture is different; see the next section.**
+- **The small-graph findings hold at 10 million nodes, for uniform pairs.**
   - k = 8 has 12–20x fewer false conflicts than k = 1 across all mixed and addition configurations at 1M and 10M.
   - Repair stays within 0.07 percentage points of a rebuild with the same labels.
   - Fresh labels still recover part of the loss after additions.
 - **Rates rise slowly with size.** That is mostly the base hierarchy, before any update: with local sharing, base k = 1 goes from 3.2% at 16,384 nodes to 4.4% at 10M. At k = 8 the relative rise is larger (local 1%: 0.17% → 0.31%), though the absolute rates stay below about 1% everywhere.
 - **Run-to-run spread is small:** the standard deviation of the repaired rate is at most 0.1 percentage points at 1M.
 
-**Caveat: uniform pairs say little about the top of the hierarchy.** Searching a sampled pair touched only 24–54 nodes on average, so the samples are dominated by deep nodes with small subtrees. A lock workload that touches nodes near the root (DomLock's distributions) will see different rates. The next precision measurement should sample nodes by depth or by a lock-access distribution.
+**Caveat: uniform pairs say little about the top of the hierarchy.** Searching a sampled pair touched only 24–54 nodes on average, so the samples are dominated by deep nodes with small subtrees.
+
+## False conflicts by depth (14 Nov 2026)
+
+`scripts/precision_depth.cpp` samples pairs differently. Each endpoint picks a primary-tree level uniformly (1 to deepest), then a node uniformly within that level. Every pair is answered exactly, and results are bucketed by the level of the shallower endpoint.
+- **Batches:** mixed, 1% and 10%.
+- **Additions:** either anywhere (`global`) or inside one top-level branch (`local`; the last argument to the program).
+- **States:** base, repair and relabel.
+
+`PRECISION_DEPTH_1M.csv` and `PRECISION_DEPTH_1M_LOCALUPD.csv` are 1M nodes, three seeds and 20,000 pairs of each kind. `PRECISION_DEPTH_10M.csv` is 10M nodes, global additions, two seeds and 5,000 pairs. A test against brute-force bitsets on 240,000 depth-sampled pairs found no mismatch.
+
+**Read the shallow levels as a few specific nodes, not a population.** Level 1 has 4 nodes, level 2 has 16, level 3 has 64 and level 4 has 256. Level here means depth in the primary 4-ary tree, not DAG depth.
+
+**No false negatives.**
+
+False-conflict rate among truly non-conflicting pairs, 1M nodes, 1% mixed batches, uniform-level pairs, shown as base / repair / relabel:
+
+| Sharing | Additions | k | Level 2 | Level 4 | Level 6 | Level 8 |
+| --- | --- | ---: | --- | --- | --- | --- |
+| in-branch | in-branch | 1 | .03 / .04 / .03 | .12 / .16 / .12 | .18 / .21 / .18 | .11 / .11 / .11 |
+| in-branch | in-branch | 8 | .03 / .04 / .03 | .12 / .13 / .12 | .12 / .13 / .12 | 0 / 0 / 0 |
+| in-branch | global | 1 | .03 / 1.00 / .63 | .12 / .93 / .69 | .18 / .51 / .43 | .11 / .13 / .13 |
+| in-branch | global | 8 | .03 / .98 / .63 | .12 / .65 / .55 | .12 / .17 / .16 | 0 / 0 / 0 |
+| cross | global | 1 | .80 / 1.00 / .80 | .85 / .98 / .85 | .79 / .89 / .79 | .42 / .44 / .42 |
+| cross | global | 8 | .80 / .99 / .80 | .85 / .91 / .85 | .55 / .57 / .55 | 0 / 0 / 0 |
+
+**Exact ranges needed.** `scripts/range_count.cpp` counts how many disjoint label ranges would represent a node's descendants exactly (`RANGE_COUNT_1M.csv`, 1M nodes, 20 sampled nodes per level). Median per level, before any update:
+
+| Sharing | Level 1 | Level 2 | Level 3 | Level 4 | Level 5 | Level 6 | Level 7 | Level 8 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| in-branch | 1 | 3,849 | 3,432 | 763 | 95 | 39 | 13 | 2 |
+| cross | 23,445 | 9,212 | 2,515 | 638 | 125 | 34 | 12 | 3 |
+
+A 1% batch changes these by under 15% (median), except level 1 with in-branch sharing, where cross-branch additions take it from 1 range to about 800 (old labels) or 1,000 (fresh labels). Fresh labels do not reduce the counts.
+
+What this shows, on this generator:
+- **The budget only matters below about level 6 at 1M.** From level 7 down, k = 8 removes nearly all false conflicts. At 10M (one level deeper overall), the same boundary is about level 9. Near-root rates there match 1M: levels 1–5 at 85–100% after global additions, with fresh labels at 66–89%. Down to level 5, nodes need hundreds to tens of thousands of ranges, so k ≤ 8 helps only partly. For example, at level 4 with in-branch sharing and global additions it goes from 93% to 65%, and at levels 1–3 it barely helps at all.
+- **Near the root, label locality decides precision.**
+  - When sharing and additions both stay inside top-level branches, every branch keeps a contiguous label range. Cross-branch pairs then never conflict falsely, and the near-root rates stay at 0–23% at any k.
+  - Once sharing or additions cross branches, near-root rates go to 80–100%.
+  - With the old labels, cross-branch additions push even an in-branch hierarchy to about 100% at levels 1–4. Fresh labels only bring it back to about 60–70%.
+- **The post-order labels themselves fragment.** A shared child gets its label inside whichever parent the DFS reaches first, so the other parent's descendants are scattered across the label space. That is a property of the labelling, not of merging or of the batch.
+- **This matters because lock requests near the root are the ones that collide.** The 12–20x reduction from k = 1 to k = 8 is real but applies to deep nodes. For near-root requests, the levers are label order, keeping updates inside a branch, or a second numbering as in MID.
 
 ## Not measured yet
 
-- False conflicts under depth-weighted or lock-access sampling, a lock pool, or STMBench7.
+- Label orders that keep shared children close to all their parents, and how much they recover near the root.
+- False conflicts under a lock-access distribution (DomLock's), a lock pool, or STMBench7.
 - Wall-clock cost of eager versus delayed repair at million scale.
 - The MID baselines, a DomLock adapter, lock-pool simulation, concurrent groups, and STMBench7.
 - Timing spread on repair and rebuild, and a second machine.
