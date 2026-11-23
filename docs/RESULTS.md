@@ -288,9 +288,52 @@ What this shows, on this generator:
 - **The post-order labels themselves fragment.** A shared child gets its label inside whichever parent the DFS reaches first, so the other parent's descendants are scattered across the label space. That is a property of the labelling, not of merging or of the batch.
 - **This matters because lock requests near the root are the ones that collide.** The 12–20x reduction from k = 1 to k = 8 is real but applies to deep nodes. For near-root requests, the levers are label order, keeping updates inside a branch, or a second numbering as in MID.
 
+## Label order near the root (24 Nov 2026)
+
+`scripts/label_order.cpp` writes `LABEL_ORDER_1M.csv`. Any permutation of point labels is sound, so only precision changes. It compares four post-order labellings that differ in where a shared child gets its label:
+- **dfs:** under the first parent the traversal reaches (the order used everywhere else);
+- **last:** under the last parent reached; a child is entered only from its last explored incoming edge;
+- **primary:** under its primary-tree parent, so each primary subtree is one block. This needs the generator's primary tree. It is also fixed by construction, so relabelling does not change it.
+- **dominator:** under the dominator-tree LCA of its parents, so each dominated region is one block.
+
+**Setup:** 1M nodes, two seeds, 10,000 level-uniform pairs, mixed batches of 1% and 10% with global additions, k = 1 and 8.
+
+**Checks:** a test on graphs of 200–50,000 nodes confirmed every order is a permutation that keeps the invariant. There were no false negatives in 1,920 rows.
+
+Median exact ranges per node (base graph):
+
+| Sharing | Order | Level 1 | Level 2 | Level 3 | Level 4 | Level 5 |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| in-branch | dfs | 1 | 4,789 | 3,633 | 786 | 104 |
+| in-branch | last | 1 | 4,468 | 2,139 | 1,022 | 115 |
+| in-branch | primary | 1 | 7,572 | 3,506 | 1,123 | 106 |
+| in-branch | dominator | 1 | 4,025 | 2,963 | 1,158 | 118 |
+| cross | dfs | 25,008 | 9,356 | 2,739 | 774 | 135 |
+| cross | last | 24,175 | 9,735 | 2,611 | 732 | 65 |
+| cross | primary | 27,708 | 11,712 | 3,181 | 861 | 148 |
+| cross | dominator | 18,823 | 10,865 | 3,308 | 908 | 166 |
+
+False-conflict rate, k = 8, levels 1–5:
+
+| Sharing | State | dfs | last | primary | dominator |
+| --- | --- | --- | --- | --- | --- |
+| cross | base graph | .77 .79 .83 .84 .81 | .39 .62 .75 .76 .71 | 1.0 1.0 1.0 1.0 .96 | .52 .69 .76 .79 .77 |
+| in-branch | 1% batch, relabelled | .59 .63 .64 .56 .32 | .45 .49 .54 .52 .30 | 1.0 .98 .88 .70 .41 | .18 .31 .41 .47 .39 |
+| in-branch | 1% batch, labels kept | 1.0 .98 .88 .66 .34 | .99 .98 .87 .65 .32 | 1.0 .98 .88 .70 .41 | 1.0 1.0 .92 .71 .34 |
+
+What this shows:
+- **No single order fixes the root.** The best order lowers the exact range count by at most about 2x at any level (cross sharing, level 5: 135 → 65 with `last`), and near-root nodes still need hundreds to tens of thousands of ranges.
+- **Orders do matter at levels 1–2.**
+  - On the cross-sharing base graph, `last` roughly halves level-1 false conflicts (77% → 39%).
+  - After a batch with fresh labels, `dominator` cuts levels 1–2 by about 2–3x on the in-branch hierarchy (59% → 18%, 63% → 31%).
+  - Levels 3–5 stay at roughly 30–80% under every order.
+- **The primary-tree order is the worst.** Blocking each primary subtree leaves every extra parent's descendants scattered.
+- **With labels kept, order makes no difference.** After cross-branch additions, every order goes to about 100% at levels 1–2. The drift from the batch swamps the choice of order, so any benefit needs relabelling.
+- **This points to more than one numbering.** One permutation cannot keep every near-root descendant set contiguous. A conjunction of two or more numberings, as in MID, is the natural next test. Whether `last` and `dfs` (or `dominator`) fail on different pairs, which a conjunction needs, is untested.
+
 ## Not measured yet
 
-- Label orders that keep shared children close to all their parents, and how much they recover near the root.
+- Two or more numberings combined conjunctively (MID-style), for example `dfs` with `last` or `dominator`.
 - False conflicts under a lock-access distribution (DomLock's), a lock pool, or STMBench7.
 - Wall-clock cost of eager versus delayed repair at million scale.
 - The MID baselines, a DomLock adapter, lock-pool simulation, concurrent groups, and STMBench7.

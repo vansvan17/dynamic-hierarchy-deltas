@@ -55,6 +55,7 @@ c++ -std=c++20 -O3 -I. scripts/precision.cpp -o build/precision && ./build/preci
 c++ -std=c++20 -O3 -I. scripts/precision_large.cpp -o build/precision_large && ./build/precision_large 10000000 3 200000 > docs/PRECISION_LARGE_10M.csv   # sampled exact pairs at scale
 c++ -std=c++20 -O3 -I. scripts/precision_depth.cpp -o build/precision_depth && ./build/precision_depth 1000000 3 20000 global > docs/PRECISION_DEPTH_1M.csv   # false conflicts by depth
 c++ -std=c++20 -O3 -I. scripts/range_count.cpp -o build/range_count && ./build/range_count 1000000 20 > docs/RANGE_COUNT_1M.csv   # exact ranges per node by level
+c++ -std=c++20 -O3 -I. scripts/label_order.cpp -o build/label_order && ./build/label_order 1000000 2 10000 > docs/LABEL_ORDER_1M.csv   # four label orders compared by depth
 ```
 
 **Graph:** a 4-ary tree plus an extra earlier parent for every eighth node, 1–10 million nodes. Extra parents either stay within the node's top-level branch (`local-sharing`) or not (`cross-sharing`).
